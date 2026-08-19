@@ -37,28 +37,67 @@ def split_audio_into_chunks(
 ) -> tuple[list[str], str]:
     """
     Split an audio file into fixed-size WAV chunks.
+
+    Corrupt, empty, or unreadable audio input is handled cleanly
+    instead of allowing the audio processing to crash the worker.
+
     Returns:
         chunk_paths, temp_directory
     """
     from pydub import AudioSegment
 
-    audio = AudioSegment.from_file(audio_path)
-
     chunk_temp_dir = tempfile.mkdtemp(prefix="audio_chunks_")
 
-    chunk_paths = []
+    try:
+        # Validate the input before attempting audio processing.
+        if not audio_path:
+            raise ValueError("Audio input is empty")
 
-    for i, start in enumerate(range(0, len(audio), chunk_duration_ms)):
-        chunk = audio[start : start + chunk_duration_ms]
+        audio_file = Path(audio_path)
 
-        chunk_path = Path(chunk_temp_dir) / f"chunk_{i}.wav"
+        if not audio_file.exists():
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-        chunk.export(chunk_path, format="wav")
+        if audio_file.stat().st_size == 0:
+            raise ValueError("Audio file is empty")
 
-        chunk_paths.append(str(chunk_path))
+        # Existing audio-processing logic remains unchanged.
+        audio = AudioSegment.from_file(audio_path)
 
-    return chunk_paths, chunk_temp_dir
+        if len(audio) == 0:
+            raise ValueError("Audio file contains no audio data")
 
+        chunk_paths = []
+
+        for i, start in enumerate(range(0, len(audio), chunk_duration_ms)):
+            chunk = audio[start : start + chunk_duration_ms]
+
+            chunk_path = Path(chunk_temp_dir) / f"chunk_{i}.wav"
+
+            chunk.export(chunk_path, format="wav")
+
+            chunk_paths.append(str(chunk_path))
+
+        return chunk_paths, chunk_temp_dir
+
+    except (ValueError, FileNotFoundError) as exc:
+        logger.warning(
+            "Invalid audio input %s: %s",
+            audio_path,
+            exc,
+        )
+        shutil.rmtree(chunk_temp_dir, ignore_errors=True)
+        return [], ""
+
+    except Exception as exc:
+        logger.error(
+            "Failed to process audio input %s: %s",
+            audio_path,
+            exc,
+            exc_info=True,
+        )
+        shutil.rmtree(chunk_temp_dir, ignore_errors=True)
+        return [], ""
 
 # ---------------------------------------------------------------------------
 # Real detection helpers (Whisper / pyannote / OpenAI) with fallback to stubs
